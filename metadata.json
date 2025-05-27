@@ -1,0 +1,6 @@
+
+{
+  "name": "YouycgTV",
+  "description": "A React web application that emulates an IPTV channel guide, allowing users to browse TV channels by category and view a placeholder for the selected channel's stream. Styled with Tailwind CSS for a modern, dark-themed interface.",
+  "requestFramePermissions": []
+}
