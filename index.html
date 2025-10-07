@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YouycgTV</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- Pin a known-stable hls.js version to avoid unexpected changes -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.14/dist/hls.min.js"></script>
   <style>
     /* Custom scrollbar styling for webkit browsers */
     ::-webkit-scrollbar {
@@ -50,5 +51,4 @@
   <div id="root" class="h-screen flex flex-col"></div>
   <script type="module" src="./index.tsx"></script>
 </body>
-</html><link rel="stylesheet" href="index.css">
-<script src="index.tsx" type="module"></script>
+</html>

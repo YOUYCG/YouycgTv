@@ -89,7 +89,16 @@ export const App: React.FC = () => {
           }
 
         } else if (trimmedLine && !trimmedLine.startsWith('#')) { 
-          currentChannelInfo.streamUrl = trimmedLine;
+          const url = trimmedLine;
+
+          // Filter out insecure (http) or unsupported protocols to avoid mixed-content blocks in HTTPS.
+          if (!/^https:\/\//i.test(url)) {
+            currentChannelInfo = {};
+            explicitChannelName = '';
+            continue;
+          }
+
+          currentChannelInfo.streamUrl = url;
 
           if (currentChannelInfo.name && currentChannelInfo.streamUrl) {
             if (!currentChannelInfo.id) {
