@@ -14,7 +14,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-
+  const recoverCountsRef = useRef<{ media: number; network: number }>({ media: 0, network: 0 });
 
   useEffect(() => {
     if (typeof Hls === 'undefined') {
@@ -30,7 +30,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
     setIsLoading(true);
     setError(null);
     setIsPlaying(false);
-
+    recoverCountsRef.current = { media: 0, network: 0 };
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -39,11 +39,16 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
     
     if (Hls.isSupported()) {
       const hls = new Hls({
-         capLevelToPlayerSize: true,
-         maxBufferSize: 30, 
-         maxBufferLength: 10,
-         // Enable detailed error logging in development
-         // debug: process.env.NODE_ENV === 'development' 
+        capLevelToPlayerSize: true,
+        // Leave maxBufferSize at library default (≈60MB). Setting a tiny value causes frequent stalls.
+        // Tune live buffering moderately to reduce rebuffering while keeping latency reasonable.
+        maxBufferLength: 20,
+        backBufferLength: 60,
+        lowLatencyMode: true,
+        // Slightly relax timeouts to tolerate slower networks/CDNs.
+        fragLoadTimeout: 20000,
+        manifestLoadTimeout: 20000,
+        // debug: process.env.NODE_ENV === 'development'
       });
       hlsRef.current = hls;
 
@@ -51,34 +56,56 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
       hls.attachMedia(videoElement);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        videoElement.play().catch(playError => {
+        videoElement.play().catch((playError) => {
           console.warn("Autoplay was prevented:", playError);
-          // If autoplay fails, we might need a user interaction to start.
-          // Some browsers require interaction for unmuted autoplay.
         });
-        // Note: setIsLoading(false) is handled by 'onplaying' or 'onerror'
+        // 'onplaying' will clear loading state
       });
 
-      hls.on(Hls.Events.ERROR, (event: any, data: any) => {
-        let errorMsg = `播放失败: ${data.details || '未知错误'}`;
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              errorMsg = `网络错误: ${data.details || '无法连接直播源'}`;
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              errorMsg = `媒体错误: ${data.details || '视频流解码失败'}`;
-              break;
-            default:
-              // For other fatal errors, hls.destroy() might be called by HLS.js itself or here
-              // hls.destroy(); 
-              // hlsRef.current = null;
-              break;
+      hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
+        // Non-fatal errors should not surface to the UI as \"无法播放\"
+        if (!data.fatal) {
+          console.warn('Non-fatal HLS error:', data);
+          // Show a spinner if we are stalled, but don't mark as error
+          if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+            setIsLoading(true);
           }
-        } else {
-            console.warn('Non-fatal HLS error:', data);
+          // For intermittent network hiccups ask hls.js to resume loading
+          if (
+            data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+            (data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT ||
+             data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+             data.details === Hls.ErrorDetails.AUDIO_TRACK_LOAD_TIMEOUT ||
+             data.details === Hls.ErrorDetails.AUDIO_TRACK_LOAD_ERROR)
+          ) {
+            try { hls.startLoad(); } catch {}
+          }
+          return;
         }
-        setError(errorMsg);
+
+        // Fatal errors – try to recover a few times, then surface error
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          recoverCountsRef.current.network += 1;
+          if (recoverCountsRef.current.network <= 3) {
+            console.warn('Recovering from fatal network error, attempt', recoverCountsRef.current.network);
+            try { hls.startLoad(); } catch {}
+            setIsLoading(true);
+            return;
+          }
+          setError(`网络错误: ${data.details || '无法连接直播源'}`);
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          recoverCountsRef.current.media += 1;
+          if (recoverCountsRef.current.media <= 2) {
+            console.warn('Recovering from fatal media error, attempt', recoverCountsRef.current.media);
+            try { hls.recoverMediaError(); } catch {}
+            setIsLoading(true);
+            return;
+          }
+          setError(`媒体错误: ${data.details || '视频流解码失败'}`);
+        } else {
+          setError(`播放失败: ${data.details || '未知错误'}`);
+        }
+
         setIsLoading(false);
         setIsPlaying(false);
       });
@@ -86,24 +113,24 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
       videoElement.onwaiting = () => {
         setIsLoading(true);
         setIsPlaying(false);
-      }
+      };
       videoElement.onplaying = () => {
         setIsLoading(false);
         setIsPlaying(true);
-      }
+      };
       videoElement.onpause = () => setIsPlaying(false);
       videoElement.onended = () => setIsPlaying(false);
       videoElement.onerror = () => { 
         setError('视频播放器遇到错误。');
         setIsLoading(false);
         setIsPlaying(false);
-      }
+      };
 
     } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
       videoElement.src = channel.streamUrl;
       videoElement.addEventListener('loadedmetadata', () => {
-        videoElement.play().catch(playError => console.warn("Autoplay prevented (native HLS):", playError));
-        setIsLoading(false); // Assuming it will play or show controls
+        videoElement.play().catch((playError) => console.warn("Autoplay prevented (native HLS):", playError));
+        setIsLoading(false);
       });
       videoElement.addEventListener('error', () => {
         setError('无法加载视频流 (原生HLS)。');
@@ -113,7 +140,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
       videoElement.onplaying = () => {
         setIsLoading(false);
         setIsPlaying(true);
-      }
+      };
       videoElement.onpause = () => setIsPlaying(false);
       videoElement.onended = () => setIsPlaying(false);
     } else {
@@ -133,9 +160,9 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
         videoElement.onpause = null;
         videoElement.onended = null;
         videoElement.onerror = null;
-        videoElement.src = ''; 
-        videoElement.removeAttribute('src'); 
-        videoElement.load(); 
+        videoElement.src = '';
+        videoElement.removeAttribute('src');
+        videoElement.load();
       }
     };
   }, [channel.streamUrl, channel.id]);
@@ -147,7 +174,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({ channel }) => {
         controls
         autoPlay
         playsInline
-        muted // Muted is often required for autoplay to work
+        muted
         className="w-full h-full object-contain rounded-lg"
         aria-label={`${channel.name} stream`}
         poster={channel.logoUrl && !error ? channel.logoUrl : undefined}
